@@ -19,14 +19,13 @@ This is an **AI systems design** project, not a modeling exercise. The hard part
 2. [Why a financial institution](#2-why-a-financial-institution)
 3. [Data sources (verified)](#3-data-sources-verified)
 4. [System architecture](#4-system-architecture)
-5. [Build roadmap: step graph](#5-build-roadmap--step-graph)
-6. [Steps and tasks](#6-steps--tasks)
+5. [Build roadmap: step graph](#5-build-roadmap-step-graph)
+6. [Steps and tasks](#6-steps-and-tasks)
 7. [Question bank (what the agent must answer)](#7-question-bank)
 8. [Repository layout](#8-repository-layout)
 9. [Tech stack](#9-tech-stack)
-10. [Design principles and guardrails](#10-design-principles--guardrails)
-11. [Interview talking points](#11-interview-talking-points)
-12. [Definition of done](#12-definition-of-done)
+10. [Design principles and guardrails](#10-design-principles-and-guardrails)
+11. [Definition of done](#11-definition-of-done)
 
 ---
 
@@ -51,7 +50,7 @@ This project automates that loop with an agent that **uses tools rather than gue
 - **Real public data at the institution level.** The CFPB, FDIC, Federal Reserve, and SEC publish bank-level data for free with no login.
 - **Audit and explainability matter here.** Model-risk guidance (Fed SR 11-7) and regulators expect traceable reasoning, which is why the audit log is a core feature.
 - **There is a real regulatory corpus for RAG.** Reg E (electronic transfers and disputes), Reg Z (credit cards and lending), the CFPB supervision manual, and the FDIC risk manual give the documents the agent cites.
-- **It makes a strong interview story.** It covers SQL, warehousing, statistics, LLM tooling, and governance in one system.
+- **It exercises the full stack.** SQL, warehousing, statistics, LLM tooling, and governance in one system.
 
 ---
 
@@ -80,7 +79,7 @@ All endpoints below were tested live on **2026-10-08**. See [`docs/DATA_SOURCES.
 | Citibank | 7213 | `CITIBANK, N.A.` | 0000831001 |
 | Capital One | 4297 | `CAPITAL ONE FINANCIAL CORPORATION` | 0000927628 |
 
-### Data quirks the agent must handle (these make good interview material)
+### Data quirks the agent must handle
 
 - **CFPB reporting lag.** (Seen live in the smoke pull: JPMorgan Chase showed 2,227 complaints for Aug 2026, 1,816 for Sep, and 20 for the first days of Oct.) Complaints are published after the company responds or after 15 days, so the **last 30–60 days are always undercounted**. An agent that reports "complaints fell 30% this month!" without a data-maturity check is wrong. Build a `data_maturity` check into the analytics tools.
 - **Narratives are opt-in.** Only about half of complaints include consumer narratives, and they are scrubbed of PII. Treat narrative-based findings as a sample, not the population.
@@ -151,6 +150,50 @@ flowchart LR
 ```
 
 **Request lifecycle**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant I as CLI / Web UI
+    participant A as Agent (Claude)
+    participant T as Tool registry
+    participant W as dbt marts (DuckDB / Snowflake)
+    participant E as Analytics engine
+    participant R as RAG retriever
+    participant V as Validator
+    participant P as Report renderer
+    participant L as Audit log
+
+    U->>I: "Why did JPM complaints rise in March?"
+    I->>L: open run (run_id)
+    I->>A: question + system prompt + tool schemas
+    loop Plan → call → observe (max 15 tool calls)
+        A->>T: tool call (e.g. check_data_maturity, compare_periods)
+        alt warehouse / analytics tool
+            T->>W: read-only SQL (sqlglot allow-list)
+            W-->>T: rows + as_of
+            T->>E: compute (decompose, test, benchmark)
+            E-->>T: typed result
+        else document tool
+            T->>R: search_documents(query, filters)
+            R-->>T: cited chunks
+        end
+        T-->>A: result + provenance + tool_call_id
+        T->>L: log call, result hash, latency
+    end
+    A->>V: draft Findings JSON
+    V->>V: every number matches a tool output?
+    alt validation fails
+        V-->>A: mismatches → regenerate
+        A->>V: revised Findings
+    end
+    V->>P: validated Findings
+    P-->>I: findings.json + report.html
+    P->>L: log outputs, tokens, cost
+    I-->>U: exec report with citations
+```
+
 1. The user asks a question through the CLI or web UI. A `run_id` is created and logged.
 2. The planner LLM (Claude, with tool use) breaks it into tool calls.
 3. Tools run deterministic SQL and Python and return typed results with provenance (query text, row counts, data-as-of date).
@@ -219,10 +262,10 @@ flowchart TD
 > Tick these off as you go. Each step ends with a **deliverable** and an **exit test**.
 
 ### Step 0: Scope and setup
-- [x] Pick the focal bank and peer set: **JPMorgan Chase (focal)** + Bank of America, Wells Fargo, Citibank, Capital One. Edit `dbt/seeds/bank_dim.csv` to change.
-- [x] Write 10 target questions in [`evals/questions.yaml`](evals/questions.yaml) (from the [question bank](#7-question-bank)). Each has expected tools, required caveats, failure modes, and reference SQL for scoring.
+- Pick the focal bank and peer set: **JPMorgan Chase (focal)** + Bank of America, Wells Fargo, Citibank, Capital One. Edit `dbt/seeds/bank_dim.csv` to change.
+- Write 10 target questions in [`evals/questions.yaml`](evals/questions.yaml) (from the [question bank](#7-question-bank)). Each has expected tools, required caveats, failure modes, and reference SQL for scoring.
 - [ ] Create the repo, `pyproject.toml`, virtual env, `ruff`, `pytest`, pre-commit
-- [x] Decide on the warehouse: **DuckDB locally** (free, fast) with a **Snowflake** target (30-day free trial for the demo). **dbt** owns every transform, so switching is `DBT_TARGET=snowflake`.
+- Decide on the warehouse: **DuckDB locally** (free, fast) with a **Snowflake** target (30-day free trial for the demo). **dbt** owns every transform, so switching is `DBT_TARGET=snowflake`.
 - [ ] Get an Anthropic API key and put it in `.env` (never commit it)
 - [ ] Draft the audit-log event schema (`run_id`, `step`, `tool`, `input`, `output_hash`, `tokens`, `latency_ms`, `model`, `ts`)
 - **Deliverable:** repo skeleton, config, question list. **Exit test:** `pytest` runs (empty) and `python scripts/fetch_data.py --smoke` passes.
@@ -243,11 +286,11 @@ flowchart TD
     3. A state-level fraud ring (TX) → card disputes spike in one state only
   - Internal markdown docs for RAG: incident post-mortems, a fee-schedule change memo, a dispute SOP. These are what the agent should retrieve to explain anomalies.
 - **dbt: land and stage the pull** (in `dbt/`). dbt doesn't download data; `fetch_data.py` does. dbt starts the moment files land:
-  - [x] dbt project with `dbt-duckdb` (dev) and `dbt-snowflake` (demo) targets in `dbt/profiles.yml`. Credentials come only from env vars.
-  - [x] **Sources = bronze.** `models/staging/_sources.yml` reads the raw CSVs **in place** via DuckDB `external_location`, so no separate load script is needed in dev.
-  - [x] **Seeds = reference data.** `bank_dim.csv` (IDs across CFPB/FDIC/SEC) and `fred_series_dim.csv`
-  - [x] **Staging = silver.** `stg_cfpb__monthly_counts`, `stg_fdic__financials` (converts $ thousands to dollars), `stg_fred__observations` (wide to long)
-  - [x] Tests on sources and staging: not-null, unique, `relationships` to `bank_dim` (catches a bank whose name changed in CFPB)
+  - dbt project with `dbt-duckdb` (dev) and `dbt-snowflake` (demo) targets in `dbt/profiles.yml`. Credentials come only from env vars.
+  - **Sources = bronze.** `models/staging/_sources.yml` reads the raw CSVs **in place** via DuckDB `external_location`, so no separate load script is needed in dev.
+  - **Seeds = reference data.** `bank_dim.csv` (IDs across CFPB/FDIC/SEC) and `fred_series_dim.csv`
+  - **Staging = silver.** `stg_cfpb__monthly_counts`, `stg_fdic__financials` (converts $ thousands to dollars), `stg_fred__observations` (wide to long)
+  - Tests on sources and staging: not-null, unique, `relationships` to `bank_dim` (catches a bank whose name changed in CFPB)
   - [ ] Add `stg_cfpb__complaints` on the bulk CSV (unzip to `data/raw/cfpb/complaints.csv`), with dedupe on `complaint_id` and a `cfpb_taxonomy_map` seed for product/issue renames
   - [ ] Add `stg_synth__*` models once the synthetic generator exists
   - [ ] Source freshness: add `loaded_at_field` and `freshness` thresholds so `dbt source freshness` fails if the pull is stale
@@ -255,11 +298,11 @@ flowchart TD
 
 ### Step 2: dbt marts (gold layer the agent queries)
 Layering: **sources** (bronze) → **staging** (silver, 1:1 with sources) → **intermediate** (reshaping) → **marts** (gold). Agent tools may only query `marts.*`.
-- [x] `int_fdic__quarterly_flows`: de-cumulates FDIC year-to-date income and expense into true quarterly flows
-- [x] `fct_complaints_monthly`: complaints per bank per month, **as-of joined** to quarter-end deposits to give `complaints_per_1b_deposits`, plus MoM/YoY % and an **`is_mature` flag** for the CFPB reporting lag (`var('cfpb_maturity_days')`)
-- [x] `fct_bank_quarterly`: FDIC ratios with YoY deltas in percentage points
-- [x] `fct_macro_monthly`: FRED on a monthly spine; weekly series averaged, quarterly carried forward with an `is_carried_forward` flag
-- [x] Singular tests: no negative counts, every mature month finds deposits, ratios in plausible ranges
+- `int_fdic__quarterly_flows`: de-cumulates FDIC year-to-date income and expense into true quarterly flows
+- `fct_complaints_monthly`: complaints per bank per month, **as-of joined** to quarter-end deposits to give `complaints_per_1b_deposits`, plus MoM/YoY % and an **`is_mature` flag** for the CFPB reporting lag (`var('cfpb_maturity_days')`)
+- `fct_bank_quarterly`: FDIC ratios with YoY deltas in percentage points
+- `fct_macro_monthly`: FRED on a monthly spine; weekly series averaged, quarterly carried forward with an `is_carried_forward` flag
+- Singular tests: no negative counts, every mature month finds deposits, ratios in plausible ranges
 - [ ] `fct_complaints_daily(bank_id, date, product, issue, state, channel, n, n_timely, n_with_narrative)` from the bulk staging model, so Step 3 can decompose drivers
 - [ ] `fct_ops_daily` (synthetic calls + disputes + incident flags)
 - [ ] `dim_data_maturity(source, as_of, complete_through)`: one row per source, so tools can call `check_data_maturity` cheaply
@@ -340,7 +383,7 @@ Wrap Steps 2–4 as **LLM-callable tools** with strict JSON schemas.
 - [ ] **Refusal tests:** unanswerable or out-of-scope questions ("What will JPM's stock do?") must be declined
 - [ ] **Cost and latency** per question; track over versions
 - [ ] Output an eval scorecard as `reports/eval_scorecard.html`
-- **Deliverable:** `evals/run_evals.py`. **Exit test (M5):** scorecard committed, with numbers you can quote in an interview.
+- **Deliverable:** `evals/run_evals.py`. **Exit test (M5):** scorecard committed and linked from this README.
 
 ### Step 11: Ship
 - [ ] Tests: unit (analytics), contract (tools), integration (agent with recorded LLM responses), with a coverage badge
@@ -427,15 +470,7 @@ bank-ops-ai-agent/
 5. **Reproducible.** Seeded synthetic data, pinned data snapshots, and `audit replay`.
 6. **Cheap by default.** Caching, model routing, tool-call budgets, and cost logged per run.
 
-## 11. Interview talking points
-
-- **"Why not just give the LLM the database?"** Hallucinated math, unbounded queries, no audit trail. Typed tools plus a semantic layer plus a numeric validator fix all three.
-- **"How do you know it's right?"** Injected-anomaly ground truth, driver recall, 100% numeric grounding, citation precision, refusal tests, all on a scorecard.
-- **"What was the hardest data problem?"** The CFPB reporting lag (recent months look like drops), taxonomy renames, and normalizing complaint volume by deposit size.
-- **"How would this run at a real bank?"** Swap DuckDB for Snowflake, synthetic for internal tables, and a local vector DB for Cortex Search or pgvector. Add SSO, row-level security, and SR 11-7 model validation.
-- **"What would you do next?"** Proactive monitoring (scheduled anomaly sweeps with alerts), a forecasting tool, and human feedback on findings fed back into evals.
-
-## 12. Definition of done
+## 11. Definition of done
 
 - [ ] `docker compose up` → working web UI on sample data in under 5 minutes
 - [ ] 10 benchmark questions answered with tool traces and HTML reports committed in `reports/examples/`
