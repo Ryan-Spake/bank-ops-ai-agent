@@ -493,6 +493,10 @@ bank-ops-ai-agent/
 - [ ] Audit log can replay any run
 - [ ] README has a demo GIF, architecture diagram, and results table
 
+## License
+
+[MIT](LICENSE) © 2026 Ryan Spake
+
 ---
 
 *Data: CFPB Consumer Complaint Database (CC0), FDIC BankFind Suite, FRED (Federal Reserve Bank of St. Louis), SEC EDGAR, and eCFR. Synthetic internal data is generated and clearly labeled; it does not represent any real institution's internal operations.*
