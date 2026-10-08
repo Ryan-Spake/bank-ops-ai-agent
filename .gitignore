@@ -30,3 +30,5 @@ dbt/.user.yml
 
 # private working copy of the README (README.md is the public GitHub page)
 PROJECT_PLAN.md
+# private decision log (why things are the way they are)
+DECISIONS.md
