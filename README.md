@@ -120,7 +120,7 @@ flowchart LR
 
     subgraph RAG[RAG]
         D1[Chunk + embed]
-        D2[(Vector store)]
+        D2[(Chroma + BM25 index)]
         D3[Hybrid retriever]
     end
 
@@ -284,8 +284,10 @@ Pure Python on top of gold marts. Every function returns a typed result (pydanti
 - [ ] Collect: Reg E (12 CFR 1005) and Reg Z (12 CFR 1026) from the eCFR API, the CFPB Supervision & Examination Manual (complaint-management module), FDIC RMS Manual sections, 10-K risk factors and MD&A for the 5 banks, plus the synthetic internal docs from Step 1
 - [ ] Parse: HTML/PDF → clean text, keeping section headers and citation IDs (e.g. `12 CFR 1005.11(c)`)
 - [ ] Chunk: structure-aware (by regulation section or 10-K Item), about 500–800 tokens, with metadata `{source, doc_type, bank_id, section, effective_date, url}`
-- [ ] Embed: start local (`sentence-transformers` or `fastembed`); store in **LanceDB or Chroma** (or Snowflake Cortex Search if you use Snowflake)
-- [ ] Retrieve: **hybrid BM25 + vector**, metadata filters (bank, doc_type, date ≤ period), then a reranker
+- [ ] Embed with `fastembed` (`BAAI/bge-small-en-v1.5`, ONNX, CPU-only, no torch) and store in **Chroma** (`chromadb.PersistentClient` at `data/corpus/chroma/`), one collection per corpus: `regulations`, `filings`, `internal_docs`
+- [ ] Keyword index: `rank-bm25` over the same chunks (Chroma has no built-in BM25), so exact citations like `1005.11(c)` and terms like "provisional credit" still match
+- [ ] Retrieve: **hybrid**. Query Chroma (vector, with `where` metadata filters on bank, doc_type, date ≤ period) and BM25 in parallel, merge with reciprocal rank fusion, then rerank the top 20 with a `fastembed` cross-encoder
+- [ ] Keep all retrieval behind `src/bankops/rag/retriever.py` so tools never import Chroma directly. Snowflake Cortex Search can be added later as a second backend for the Snowflake demo.
 - [ ] Also index **complaint narratives** as a separate collection so the agent can quote representative customer language (sampled, PII already scrubbed by CFPB)
 - [ ] Retrieval eval: 25 hand-labeled query→relevant-chunk pairs; track recall@5 and MRR
 - **Deliverable:** `src/bankops/rag/`. **Exit test:** "What are the timing requirements for resolving an error dispute?" retrieves `12 CFR 1005.11(c)` in the top 3.
@@ -408,7 +410,7 @@ bank-ops-ai-agent/
 | Transforms | **dbt** (`dbt-duckdb` dev / `dbt-snowflake` demo) | Tested, documented, lineage-tracked SQL; docs double as the agent's semantic layer |
 | Analytics | pandas / polars, statsmodels, scipy | Deterministic and testable |
 | LLM | **Claude via Anthropic SDK** (tool use, prompt caching) | Native tool calling and structured output |
-| RAG | LanceDB or Chroma + BM25 (`rank_bm25`) + reranker | Hybrid retrieval, runs locally |
+| RAG | **Chroma** + BM25 (`rank-bm25`) + `fastembed` embeddings and reranker | Simple local vector store with metadata filters; BM25 catches exact citations; no GPU or torch needed |
 | Schemas | pydantic v2 | Tool I/O contracts and the findings schema |
 | SQL safety | sqlglot | Parse and allow-list before execution |
 | Report | Jinja2 + Plotly | Self-contained HTML |

@@ -7,8 +7,6 @@ logs/*
 !**/.gitkeep
 *.duckdb
 *.duckdb.wal
-.lancedb/
-chroma/
 
 # secrets
 .env
