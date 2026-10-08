@@ -1,0 +1,23 @@
+version: 2
+seeds:
+  - name: bank_dim
+    description: "Focal bank + peer group with IDs across CFPB, FDIC and SEC. Single source of truth - scripts/fetch_data.py reads it too."
+    config:
+      column_types: {fdic_cert: integer, sec_cik: varchar, is_focal: boolean}
+    columns:
+      - name: bank_id
+        data_tests: [unique, not_null]
+      - name: fdic_cert
+        data_tests: [unique, not_null]
+      - name: cfpb_company
+        data_tests: [unique, not_null]
+  - name: fred_series_dim
+    description: FRED macro series used as context drivers.
+    columns:
+      - name: series_id
+        data_tests: [unique, not_null]
+      - name: frequency
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [weekly, monthly, quarterly]

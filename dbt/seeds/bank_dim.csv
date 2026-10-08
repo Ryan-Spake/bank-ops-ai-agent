@@ -1,0 +1,6 @@
+bank_id,bank_name,fdic_cert,cfpb_company,sec_cik,is_focal
+jpm,JPMorgan Chase,628,JPMORGAN CHASE & CO.,0000019617,true
+bac,Bank of America,3510,"BANK OF AMERICA, NATIONAL ASSOCIATION",0000070858,false
+wfc,Wells Fargo,3511,WELLS FARGO & COMPANY,0000072971,false
+citi,Citibank,7213,"CITIBANK, N.A.",0000831001,false
+cof,Capital One,4297,CAPITAL ONE FINANCIAL CORPORATION,0000927628,false

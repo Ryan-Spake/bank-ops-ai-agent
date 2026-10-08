@@ -1,0 +1,38 @@
+version: 2
+models:
+  - name: stg_cfpb__monthly_counts
+    description: Monthly complaint counts per bank.
+    columns:
+      - name: bank_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('bank_dim'), field: bank_id}
+      - name: month_start
+        data_tests: [not_null]
+      - name: complaints
+        data_tests: [not_null]
+
+  - name: stg_fdic__financials
+    description: FDIC quarterly financials, dollars converted from thousands.
+    columns:
+      - name: fdic_cert
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('bank_dim'), field: fdic_cert}
+      - name: report_date
+        data_tests: [not_null]
+      - name: total_deposits_usd
+        data_tests: [not_null]
+
+  - name: stg_fred__observations
+    description: FRED observations in long format.
+    columns:
+      - name: series_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('fred_series_dim'), field: series_id}
+      - name: observation_date
+        data_tests: [not_null]

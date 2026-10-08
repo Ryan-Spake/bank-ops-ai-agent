@@ -1,0 +1,12 @@
+# Fetch settings for scripts/fetch_data.py.
+# Banks and FRED series live in dbt/seeds/ (bank_dim.csv, fred_series_dim.csv),
+# the single source of truth for both the fetcher and the warehouse.
+
+history_start: "2019-01-01"
+
+fdic_fields: [REPDTE, ASSET, DEP, LNLSNET, NETINC, ROA, ROE, NIMY, EEFFR, NTLNLSR, NCLNLSR, ELNATR, NONII, NONIX]
+
+regulations:   # eCFR Title 12 parts for the RAG corpus
+  "1005": Regulation E - Electronic Fund Transfers (disputes, error resolution)
+  "1026": Regulation Z - Truth in Lending (credit cards, billing errors)
+  "1030": Regulation DD - Truth in Savings (deposit account fees/disclosures)

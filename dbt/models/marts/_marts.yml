@@ -1,0 +1,35 @@
+version: 2
+models:
+  - name: fct_complaints_monthly
+    description: >
+      Monthly CFPB complaint volume per bank, normalized per $1B deposits, with
+      month-over-month / year-over-year change and an is_mature flag for the CFPB
+      reporting lag. Agent tools must check is_mature before claiming a trend.
+    columns:
+      - name: complaint_month_key
+        data_tests: [unique, not_null]
+      - name: bank_id
+        data_tests: [not_null]
+      - name: complaints
+        data_tests: [not_null]
+      - name: is_mature
+        description: False when the month ended within var('cfpb_maturity_days') days - counts still filling in.
+        data_tests: [not_null]
+      - name: complaints_per_1b_deposits
+        description: Complaints per $1B of quarter-end deposits (as-of join).
+
+  - name: fct_bank_quarterly
+    description: FDIC quarterly financials with YTD fields de-cumulated to quarterly flows.
+    columns:
+      - name: bank_quarter_key
+        data_tests: [unique, not_null]
+      - name: efficiency_ratio_pct
+        description: Non-interest expense / revenue. Lower is better.
+
+  - name: fct_macro_monthly
+    description: FRED macro series at monthly grain (long format), quarterly series carried forward.
+    columns:
+      - name: series_month_key
+        data_tests: [unique, not_null]
+      - name: is_carried_forward
+        data_tests: [not_null]

@@ -1,0 +1,9 @@
+series_id,description,frequency,unit
+DRCCLACBS,Credit card delinquency rate - all commercial banks,quarterly,percent
+DRSFRMACBS,Single-family mortgage delinquency rate - all commercial banks,quarterly,percent
+FEDFUNDS,Effective federal funds rate,monthly,percent
+UNRATE,Unemployment rate,monthly,percent
+MORTGAGE30US,30-year fixed mortgage rate,weekly,percent
+TOTALSL,Total consumer credit outstanding,monthly,usd_millions
+CPIAUCSL,CPI for all urban consumers,monthly,index
+UMCSENT,University of Michigan consumer sentiment,monthly,index

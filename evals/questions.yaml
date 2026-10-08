@@ -1,0 +1,475 @@
+# =============================================================================
+# Benchmark questions for the Bank Operations Intelligence Agent
+# =============================================================================
+# Source: README §7 "Question bank". The question text is kept verbatim; every
+# other field tells the eval harness (Step 10) how to score the agent's answer.
+#
+# Field guide
+#   question            Verbatim benchmark question (what the user types)
+#   paraphrases         Rewordings. The agent should behave the same way (robustness check)
+#   interpretation      How an ideal analyst would scope the question against our data
+#   entities            Resolved banks / periods / CFPB labels / FRED series
+#   expected_tools      required: must be called · optional: reasonable to call
+#   data_dependencies   dbt marts needed; status = available | pending (step that builds it)
+#   must                Behaviors the answer MUST show (each scored pass/fail)
+#   must_not            Failure modes (any hit = fail on that dimension)
+#   reference_checks    SQL the harness runs at eval time to get expected values.
+#                       Values are never hard-coded because CFPB data keeps changing.
+#   snapshot            Values observed on snapshot.as_of, for authoring context only. Not an answer key.
+#   ground_truth_ref    Pointer into evals/ground_truth.yaml (synthetic anomalies only)
+#
+# All CFPB product/issue labels below were checked against the live API on 2026-10-08.
+# =============================================================================
+
+version: 1
+as_of: "2026-10-08"
+
+defaults:
+  focal_bank: jpm
+  peer_group: [jpm, bac, wfc, citi, cof]
+  # "This month" / "latest" resolve to the latest MATURE month in
+  # marts.fct_complaints_monthly (is_mature = true), never the calendar month.
+  # On 2026-10-08 that is 2026-07; Aug-Oct are still filling in.
+  period_resolution: latest_mature_month
+  numeric_tolerance_pct: 0.5          # narrative number vs tool output
+  max_tool_calls: 15
+  max_cost_usd: 0.50
+
+# Tool names the agent may call (Step 5 registry). Validated by evals/run_evals.py.
+tool_registry:
+  - list_metrics
+  - describe_table
+  - run_sql
+  - get_metric_series
+  - check_data_maturity
+  - compare_periods
+  - decompose_change
+  - detect_anomalies
+  - test_significance
+  - peer_benchmark
+  - macro_context
+  - search_documents
+  - search_complaint_narratives
+  - render_report
+
+# Scoring dimensions (Step 10). Each question lists the ones that apply.
+scoring_dimensions:
+  numeric_grounding:  Every number in the answer traces to a tool output within tolerance
+  tool_selection:     All required tools called; no out-of-registry calls
+  caveat_compliance:  Every `must` caveat present
+  driver_recall:      Named the correct drivers (questions with ground truth or reference_checks)
+  citation_precision: Cited documents are relevant and support the claim
+  refusal:            Declines out-of-scope requests and offers what it can do instead
+  format:             Answer type matches expected (narrative / table / report / refusal)
+
+questions:
+
+  # ---------------------------------------------------------------------------
+  - id: Q01
+    question: "Why did JPMorgan Chase's complaint volume change in March 2026 vs. February?"
+    paraphrases:
+      - "What drove the jump in Chase complaints from Feb to Mar 2026?"
+      - "Explain JPM's March 2026 complaint increase."
+    category: variance_explanation
+    difficulty: medium
+    answer_type: narrative
+    interpretation: >
+      Month-over-month comparison for the focal bank. A complete answer separates
+      (1) the calendar effect (Feb has 28 days, Mar has 31), (2) the industry-wide
+      move (all peers rose the same month), and (3) bank-specific drivers by
+      product/issue. Only (3) is "why" in the business sense.
+    entities:
+      banks: [jpm]
+      periods: {p1: "2026-02", p2: "2026-03"}
+    expected_tools:
+      required: [check_data_maturity, compare_periods, decompose_change, test_significance, peer_benchmark]
+      optional: [search_complaint_narratives, search_documents]
+    data_dependencies:
+      - {model: fct_complaints_monthly, status: available}
+      - {model: fct_complaints_daily, status: pending, built_in: "Step 2"}   # needed for product/issue decomposition
+    must:
+      - Confirms both months are mature (is_mature = true)
+      - Reports the raw change AND the per-calendar-day change
+      - States whether the move is bank-specific or industry-wide by comparing to the peer change for the same months
+      - Attributes the bank-specific portion to named product/issue drivers with contribution percentages
+      - Reports a significance test with effect size (not only a p-value)
+    must_not:
+      - Presents the raw percentage change as the explanation without a day-count adjustment
+      - Claims causes not supported by tool output or retrieved documents
+    reference_checks:
+      - name: raw_and_per_day_change
+        sql: |
+          select month_start, complaints,
+                 complaints / day(month_end) as per_day
+          from marts.fct_complaints_monthly
+          where bank_id = 'jpm' and month_start in ('2026-02-01', '2026-03-01')
+          order by month_start
+      - name: peer_change_same_months
+        sql: |
+          select bank_id, mom_pct_change
+          from marts.fct_complaints_monthly
+          where month_start = '2026-03-01'
+    snapshot:
+      as_of: "2026-10-08"
+      jpm_feb: 2122
+      jpm_mar: 2439
+      raw_change_pct: 14.94
+      per_day_change_pct: 3.8       # 75.8 -> 78.7 complaints/day
+      peer_mom_pct: {bac: 18.45, citi: 6.56, cof: 19.09, wfc: 25.52}
+      note: JPM rose LESS than every peer except Citi. Most of the move is calendar plus industry-wide.
+    scoring: [numeric_grounding, tool_selection, caveat_compliance, driver_recall]
+
+  # ---------------------------------------------------------------------------
+  - id: Q02
+    question: "Which product/issue combos for Capital One are anomalous in the last 6 months?"
+    paraphrases:
+      - "Flag unusual Capital One complaint categories over the past six months."
+    category: anomaly_detection
+    difficulty: medium
+    answer_type: table
+    interpretation: >
+      Scan every product x issue series for Capital One over the 6 most recent
+      MATURE months against its own seasonal baseline. Many series are tested at
+      once, so the agent must control for multiple comparisons.
+    entities:
+      banks: [cof]
+      periods: {window: last_6_mature_months}     # 2026-02 .. 2026-07 as of 2026-10-08
+      top_products_since_2025:                   # live API check
+        - Credit card
+        - Credit reporting or other personal consumer reports
+        - Checking or savings account
+        - Debt collection
+        - Vehicle loan or lease
+    expected_tools:
+      required: [check_data_maturity, detect_anomalies]
+      optional: [test_significance, search_complaint_narratives, peer_benchmark]
+    data_dependencies:
+      - {model: fct_complaints_daily, status: pending, built_in: "Step 2"}
+    must:
+      - Excludes immature months from the window, or explicitly flags them
+      - Applies a multiple-testing control (FDR / Bonferroni) or states the expected false-positive count
+      - Applies a minimum-volume filter so tiny categories don't dominate on % change
+      - Returns a ranked table with series, period, observed, expected, score
+    must_not:
+      - Flags the CFPB reporting-lag dip in recent months as an anomaly
+    reference_checks:
+      - name: candidate_series
+        status: pending
+        sql: |
+          select product, issue, date_trunc('month', date) as month, sum(n) as n
+          from marts.fct_complaints_daily
+          where bank_id = 'cof' and date >= '2024-01-01'
+          group by all
+    scoring: [numeric_grounding, tool_selection, caveat_compliance]
+
+  # ---------------------------------------------------------------------------
+  - id: Q03
+    question: "Is Wells Fargo's checking-account fee complaint rate out of line with peers per $1B deposits?"
+    paraphrases:
+      - "How do Wells Fargo overdraft/fee complaints compare to other big banks, size-adjusted?"
+    category: peer_benchmark
+    difficulty: medium
+    answer_type: narrative
+    interpretation: >
+      "Fee complaints" = product 'Checking or savings account' with issue
+      'Problem caused by your funds being low' (overdraft / NSF / late fees),
+      plus the sub-issue 'Fees charged for closing account'. Rate = complaints
+      per $1B of deposits over the last 12 mature months, compared with the peer
+      median and the spread.
+    entities:
+      banks: [wfc]
+      peers: [jpm, bac, citi, cof]
+      cfpb_filter:
+        product: "Checking or savings account"
+        issue: ["Problem caused by your funds being low"]
+        sub_issue_also: ["Fees charged for closing account"]
+      periods: {window: last_12_mature_months}
+    expected_tools:
+      required: [check_data_maturity, peer_benchmark]
+      optional: [describe_table, run_sql, search_documents]
+    data_dependencies:
+      - {model: fct_complaints_daily, status: pending, built_in: "Step 2"}
+      - {model: fct_bank_quarterly, status: available}
+    must:
+      - States the fee-complaint definition used
+      - Normalizes by deposits and names the deposit date used (as-of quarter end)
+      - Gives WFC's rate, the peer median, and where WFC falls (z-score or rank)
+      - Notes the entity mismatch caveat (CFPB company may be a holding company; FDIC deposits are the bank subsidiary)
+    must_not:
+      - Compares raw complaint counts across banks of different size as the conclusion
+    reference_checks:
+      - name: wfc_fee_complaints_live_api
+        note: "Cross-check via CFPB API: WFC 'Problem caused by your funds being low' = 1,734 since 2025-01-01 (checked 2026-10-08)"
+    scoring: [numeric_grounding, tool_selection, caveat_compliance]
+
+  # ---------------------------------------------------------------------------
+  - id: Q04
+    question: "Did rising card delinquency (FRED DRCCLACBS) coincide with more credit-card complaints across the peer group?"
+    paraphrases:
+      - "Is there a relationship between credit card delinquency rates and card complaints at the big banks?"
+    category: macro_context
+    difficulty: hard
+    answer_type: narrative
+    interpretation: >
+      DRCCLACBS is quarterly and industry-wide. Aggregate credit-card complaints
+      for the peer group to quarters, then test contemporaneous and lagged
+      (1-2 quarter) correlation since 2019. Treat the 2020-21 COVID period as a
+      structural break.
+    entities:
+      banks: [jpm, bac, wfc, citi, cof]
+      fred_series: [DRCCLACBS]
+      cfpb_filter: {product: "Credit card"}
+      periods: {from: "2019-01-01", to: latest_mature_quarter}
+    expected_tools:
+      required: [macro_context, get_metric_series]
+      optional: [test_significance, peer_benchmark]
+    data_dependencies:
+      - {model: fct_macro_monthly, status: available}
+      - {model: fct_complaints_daily, status: pending, built_in: "Step 2"}   # product filter
+    must:
+      - Aligns frequencies (monthly complaints to quarterly delinquency) and says so
+      - Reports the correlation coefficient, lag, and n (about 25-30 quarters, so low power)
+      - States that correlation does not establish causation
+      - Notes that DRCCLACBS is an all-bank series, not specific to any peer
+      - Addresses COVID-era distortion (sensitivity check with and without 2020-21)
+    must_not:
+      - Claims delinquency caused complaint changes
+    reference_checks:
+      - name: delinquency_series
+        sql: |
+          select month_start, value
+          from marts.fct_macro_monthly
+          where series_id = 'DRCCLACBS' and not is_carried_forward
+          order by month_start
+    scoring: [numeric_grounding, tool_selection, caveat_compliance]
+
+  # ---------------------------------------------------------------------------
+  - id: Q05
+    question: "Which states drove Bank of America's YoY change in \"Problem with a purchase shown on your statement\"?"
+    paraphrases:
+      - "Break down BofA's year-over-year change in statement purchase complaints by state."
+    category: driver_decomposition
+    difficulty: medium
+    answer_type: table
+    interpretation: >
+      Issue 'Problem with a purchase shown on your statement' (product: Credit
+      card), the #3 BofA issue since 2025 at 3,933 complaints. YoY = year-to-date
+      through the latest mature month vs. the same span a year earlier. Decompose
+      the delta by state, with contribution % summing to 100.
+    entities:
+      banks: [bac]
+      cfpb_filter:
+        product: "Credit card"
+        issue: "Problem with a purchase shown on your statement"
+      periods: {p2: ytd_through_latest_mature_month, p1: same_span_prior_year}
+    expected_tools:
+      required: [check_data_maturity, decompose_change]
+      optional: [test_significance, search_complaint_narratives, search_documents]
+    data_dependencies:
+      - {model: fct_complaints_daily, status: pending, built_in: "Step 2"}
+    must:
+      - Gives the total YoY change, then the top contributing states with contribution %
+      - Flags small-count states as volatile (minimum-volume threshold)
+      - Mentions that state share partly tracks BofA's branch and customer footprint (CA, FL, TX, NY expected large)
+    must_not:
+      - Ranks states by % change alone (a state going 2 to 6 is not a driver)
+    optional_rag:
+      - "Reg Z 12 CFR 1026.13 (billing error resolution) if the agent explains the dispute process"
+    scoring: [numeric_grounding, tool_selection, caveat_compliance, driver_recall]
+
+  # ---------------------------------------------------------------------------
+  - id: Q06
+    question: "What does Reg E require for resolving the dispute types that spiked, and are timely-response rates compliant?"
+    paraphrases:
+      - "What are the Reg E error-resolution deadlines, and is JPM responding on time to unauthorized-transaction complaints?"
+    category: regulatory_rag
+    difficulty: hard
+    answer_type: narrative
+    interpretation: >
+      Follow-up phrasing ("that spiked"). With no prior context, resolve to the
+      focal bank and Reg E-covered electronic-transfer disputes: product
+      'Checking or savings account', issues 'Problem with a lender or other
+      company charging your account' (sub-issue 'Transaction was not
+      authorized') and 'Managing an account' (sub-issue 'Problem using a debit
+      or ATM card'). Retrieve 12 CFR 1005.11 and report the CFPB `timely` rate
+      for those complaints.
+    entities:
+      banks: [jpm]
+      cfpb_filter:
+        product: "Checking or savings account"
+        issue_sub_issue:
+          - ["Problem with a lender or other company charging your account", "Transaction was not authorized"]
+          - ["Managing an account", "Problem using a debit or ATM card"]
+      regulations: ["12 CFR 1005.11"]
+    expected_tools:
+      required: [search_documents, run_sql]
+      optional: [check_data_maturity, peer_benchmark]
+    data_dependencies:
+      - {model: fct_complaints_daily, status: pending, built_in: "Step 2"}   # needs n_timely
+      - {corpus: "eCFR 12 CFR 1005", status: available}                      # data/raw/ecfr/12cfr1005.xml
+    must:
+      - States that it is resolving "that spiked" to a default scope, or asks which disputes are meant
+      - "Cites 12 CFR 1005.11(c): investigate within 10 business days, or up to 45 calendar days with provisional credit within 10 business days"
+      - "Mentions the extended limits in 1005.11(c)(3): 20 business days / 90 days for new accounts, POS and foreign-initiated transfers"
+      - Reports the CFPB timely-response % for the scoped complaints
+      - Explains that CFPB 'timely' means the company responded to the CFPB within 15 days, which is NOT the same as meeting Reg E investigation deadlines
+    must_not:
+      - Declares the bank Reg E compliant or non-compliant based on the CFPB timely field
+      - Quotes regulation text without a section citation
+    reference_checks:
+      - name: reg_e_retrieval
+        expect_in_top_k: {k: 3, citation: "1005.11(c)"}
+    scoring: [citation_precision, caveat_compliance, numeric_grounding, tool_selection]
+
+  # ---------------------------------------------------------------------------
+  - id: Q07
+    question: "Why did card disputes spike in mid-March 2026?"
+    paraphrases:
+      - "What caused the jump in card disputes around March 12-16, 2026?"
+    category: incident_root_cause
+    difficulty: medium
+    answer_type: narrative
+    synthetic: true
+    interpretation: >
+      Internal synthetic data. The agent should find the spike in card_disputes,
+      localize it to the reason code and dates, and connect it to the
+      digital_incidents record and post-mortem doc for the 2026-03-12 mobile app
+      outage.
+    entities:
+      banks: [jpm]
+      periods: {window: ["2026-03-01", "2026-03-31"]}
+    expected_tools:
+      required: [detect_anomalies, decompose_change, search_documents]
+      optional: [run_sql, test_significance]
+    data_dependencies:
+      - {model: fct_ops_daily, status: pending, built_in: "Step 2 (after Step 1 synthetic generator)"}
+      - {corpus: "synthetic incident post-mortems", status: pending, built_in: "Step 1"}
+    ground_truth_ref: synth_2026_03_app_outage
+    must:
+      - Identifies the spike window (about 2026-03-12 to 2026-03-16) and the magnitude (about +35%)
+      - Localizes it to the 'unauthorized transaction' reason code
+      - Links it to the 2026-03-12 mobile app outage and cites the incident post-mortem
+      - Labels the data as synthetic
+    must_not:
+      - Attributes the spike to macro factors or seasonality
+    scoring: [driver_recall, citation_precision, numeric_grounding]
+
+  # ---------------------------------------------------------------------------
+  - id: Q08
+    question: "How did Citibank's efficiency ratio and net charge-off rate move over the last 4 quarters vs. peers?"
+    paraphrases:
+      - "Compare Citi's efficiency ratio and charge-offs to the peer group for the past year."
+    category: financial_benchmark
+    difficulty: easy
+    answer_type: table
+    interpretation: >
+      FDIC call-report ratios for the 4 most recent quarters plus the quarter
+      before them as a baseline. Show Citi's trajectory alongside the peer
+      median. Efficiency ratio: lower is better.
+    entities:
+      banks: [citi]
+      peers: [jpm, bac, wfc, cof]
+      metrics: [efficiency_ratio_pct, net_chargeoff_rate_pct]
+      periods: {window: last_4_quarters}   # 2025-09 .. 2026-06 as of 2026-10-08
+    expected_tools:
+      required: [get_metric_series, peer_benchmark]
+      optional: [run_sql, search_documents]
+    data_dependencies:
+      - {model: fct_bank_quarterly, status: available}     # answerable TODAY
+    must:
+      - Shows both metrics for each quarter with the change in percentage points
+      - States that a lower efficiency ratio is better
+      - Positions Citi against the peer median for the latest quarter
+      - Notes that Capital One's charge-off rate is structurally higher (card-heavy book), so it skews a peer mean (use the median)
+      - Names the data source and the latest report date (FDIC call report, 2026-06-30)
+    must_not:
+      - Mixes up percentage-point and percent changes
+    reference_checks:
+      - name: citi_last_5_quarters
+        sql: |
+          select report_date, efficiency_ratio_pct, net_chargeoff_rate_pct
+          from marts.fct_bank_quarterly
+          where bank_id = 'citi'
+          order by report_date desc
+          limit 5
+      - name: peer_latest_quarter
+        sql: |
+          select bank_id, efficiency_ratio_pct, net_chargeoff_rate_pct
+          from marts.fct_bank_quarterly
+          where report_date = (select max(report_date) from marts.fct_bank_quarterly)
+    snapshot:
+      as_of: "2026-10-08"
+      citi_efficiency_pct: {"2025-06": 54.7, "2025-09": 54.1, "2025-12": 55.6, "2026-03": 51.0, "2026-06": 51.4}
+      citi_nco_pct:        {"2025-06": 1.24, "2025-09": 1.19, "2025-12": 1.16, "2026-03": 1.02, "2026-06": 1.06}
+    scoring: [numeric_grounding, tool_selection, caveat_compliance, format]
+
+  # ---------------------------------------------------------------------------
+  - id: Q09
+    question: "Summarize the top 3 operational risks this month for the COO, with evidence."
+    paraphrases:
+      - "Give me an executive briefing on the biggest operational risk signals right now."
+    category: executive_report
+    difficulty: hard
+    answer_type: report
+    interpretation: >
+      "This month" resolves to the latest mature month (2026-07 as of
+      2026-10-08). The agent should say this explicitly and explain why
+      Aug-Oct are excluded. Scan anomalies across complaints, ops, and financial
+      KPIs for the focal bank, rank by severity x significance x
+      peer-relative deviation, and produce the HTML report with the top 3.
+    entities:
+      banks: [jpm]
+      periods: {month: latest_mature_month}
+    expected_tools:
+      required: [check_data_maturity, detect_anomalies, peer_benchmark, search_documents, render_report]
+      optional: [decompose_change, test_significance, macro_context, search_complaint_narratives]
+    data_dependencies:
+      - {model: fct_complaints_monthly, status: available}
+      - {model: fct_complaints_daily, status: pending, built_in: "Step 2"}
+      - {model: fct_ops_daily, status: pending, built_in: "Step 2"}
+      - {model: fct_bank_quarterly, status: available}
+    must:
+      - States which month "this month" resolved to and why
+      - Gives exactly 3 risks, each with metric, magnitude, significance, peer context, and a cited source
+      - Gives a recommended action per risk
+      - Lists caveats (data maturity, synthetic data where used)
+      - Produces findings.json and report.html that validate against the Findings schema
+    must_not:
+      - Uses the current calendar month's partial counts as evidence of a decline
+    scoring: [numeric_grounding, tool_selection, caveat_compliance, citation_precision, format]
+
+  # ---------------------------------------------------------------------------
+  - id: Q10
+    question: "What will JPM's stock price be next quarter?"
+    paraphrases:
+      - "Should I buy JPMorgan stock?"
+      - "Predict JPMorgan's share price."
+    category: out_of_scope
+    difficulty: easy
+    answer_type: refusal
+    interpretation: >
+      Out of scope: there is no market data in the warehouse, it would be
+      forecasting, and it shades into investment advice. Decline, explain the
+      system's scope, and offer in-scope alternatives.
+    entities:
+      banks: [jpm]
+    expected_tools:
+      required: []
+      optional: [list_metrics]       # to describe what it CAN answer
+    data_dependencies: []
+    must:
+      - Declines to predict the stock price
+      - Explains that the system covers operational, complaint, and call-report data, not market prices
+      - Offers 1-2 in-scope alternatives (e.g. JPM's ROE / efficiency trend vs. peers)
+    must_not:
+      - Produces any price, target, direction, or buy/sell opinion
+      - Calls run_sql or analytics tools to build a pseudo-forecast
+    scoring: [refusal, tool_selection]
+
+# -----------------------------------------------------------------------------
+# Readiness summary (update as dbt marts land)
+#   Answerable now:          Q08, Q10
+#   Partial (totals only):   Q01, Q09
+#   Blocked on Step 2 marts: Q02, Q03, Q04, Q05, Q06 (fct_complaints_daily)
+#   Blocked on Step 1 synth: Q07 (fct_ops_daily + incident docs)
+# -----------------------------------------------------------------------------

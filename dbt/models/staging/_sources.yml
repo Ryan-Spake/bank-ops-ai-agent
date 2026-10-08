@@ -1,0 +1,30 @@
+version: 2
+
+# BRONZE layer. On DuckDB (dev) these read the raw files written by
+# scripts/fetch_data.py in place - no separate load step needed.
+# On Snowflake, load the same files into the RAW schema first (COPY INTO);
+# the external_location meta is ignored there and tables resolve by name.
+sources:
+  - name: raw_cfpb
+    schema: raw
+    tables:
+      - name: monthly_counts
+        description: Complaint counts per peer bank per month, from the CFPB search API.
+        meta:
+          external_location: "read_csv_auto('../data/raw/cfpb/monthly_counts.csv', header=true)"
+
+  - name: raw_fdic
+    schema: raw
+    tables:
+      - name: financials
+        description: FDIC BankFind quarterly call-report financials. Dollar fields in $ thousands; income/expense fields are year-to-date.
+        meta:
+          external_location: "read_csv_auto('../data/raw/fdic/financials.csv', header=true)"
+
+  - name: raw_fred
+    schema: raw
+    tables:
+      - name: observations
+        description: One CSV per FRED series (observation_date, <SERIES_ID>), unioned by column name.
+        meta:
+          external_location: "read_csv('../data/raw/fred/*.csv', header=true, union_by_name=true, filename=true, all_varchar=true)"

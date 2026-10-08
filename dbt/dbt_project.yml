@@ -1,0 +1,27 @@
+name: bankops
+version: "0.1.0"
+config-version: 2
+profile: bankops
+
+
+vars:
+  # CFPB publishes complaints after the company responds (or 15 days), so recent
+  # months are undercounted. Months ending within this window are flagged immature.
+  cfpb_maturity_days: 60
+  history_start: "2019-01-01"
+
+models:
+  bankops:
+    staging:      # silver: 1:1 with sources, typed + renamed
+      +materialized: view
+      +schema: staging
+    intermediate: # reshaping / business logic not exposed to tools
+      +materialized: view
+      +schema: intermediate
+    marts:        # gold: the only layer agent tools may query
+      +materialized: table
+      +schema: marts
+
+seeds:
+  bankops:
+    +schema: reference
