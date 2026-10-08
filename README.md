@@ -15,6 +15,7 @@ This is an **AI systems design** project, not a modeling exercise. The hard part
 ---
 
 ## Table of contents
+- [Quick start](#quick-start)
 1. [Problem statement](#1-problem-statement)
 2. [Why a financial institution](#2-why-a-financial-institution)
 3. [Data sources (verified)](#3-data-sources-verified)
@@ -26,6 +27,20 @@ This is an **AI systems design** project, not a modeling exercise. The hard part
 9. [Tech stack](#9-tech-stack)
 10. [Design principles and guardrails](#10-design-principles-and-guardrails)
 11. [Definition of done](#11-definition-of-done)
+
+---
+
+## Quick start
+
+```bash
+python -m venv .venv
+.venv/Scripts/activate            # macOS/Linux: source .venv/bin/activate
+pip install -e ".[dev]"           # add ,snowflake for the Snowflake target
+pre-commit install -t pre-commit -t pre-push
+python scripts/fetch_data.py --source fdic fred cfpb
+cd dbt && dbt build --profiles-dir . && cd ..
+pytest
+```
 
 ---
 
@@ -264,7 +279,7 @@ flowchart TD
 ### Step 0: Scope and setup
 - Pick the focal bank and peer set: **JPMorgan Chase (focal)** + Bank of America, Wells Fargo, Citibank, Capital One. Edit `dbt/seeds/bank_dim.csv` to change.
 - Write 10 target questions in [`evals/questions.yaml`](evals/questions.yaml) (from the [question bank](#7-question-bank)). Each has expected tools, required caveats, failure modes, and reference SQL for scoring.
-- [ ] Create the repo, `pyproject.toml`, virtual env, `ruff`, `pytest`, pre-commit
+- Create the repo, `pyproject.toml` (deps + `[dev]` / `[snowflake]` extras), virtual env, `ruff`, `pytest`, pre-commit, and GitHub Actions CI that runs the same hooks and tests on every PR
 - Decide on the warehouse: **DuckDB locally** (free, fast) with a **Snowflake** target (30-day free trial for the demo). **dbt** owns every transform, so switching is `DBT_TARGET=snowflake`.
 - [ ] Get an Anthropic API key and put it in `.env` (never commit it)
 - [ ] Draft the audit-log event schema (`run_id`, `step`, `tool`, `input`, `output_hash`, `tokens`, `latency_ms`, `model`, `ts`)
@@ -459,7 +474,7 @@ bank-ops-ai-agent/
 | Report | Jinja2 + Plotly | Self-contained HTML |
 | CLI / Web | Typer + Rich / FastAPI + HTMX (or Streamlit) | |
 | Audit | DuckDB/SQLite table + JSONL, hash chain | |
-| Quality | pytest, ruff, GitHub Actions, Docker | |
+| Quality | pytest, ruff, pre-commit, GitHub Actions, Docker | Same checks locally (hooks) and on every PR (CI) |
 
 ## 10. Design principles and guardrails
 

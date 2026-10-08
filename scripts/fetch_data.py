@@ -7,6 +7,7 @@ Usage:
 
 Every file written is recorded in data/raw/_manifest.json (url, pulled_at, rows, sha256).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,7 +35,8 @@ FRED_SERIES = [r["series_id"] for r in csv.DictReader((SEEDS / "fred_series_dim.
 
 BROWSER_UA = {"User-Agent": "Mozilla/5.0 (bank-ops-ai-agent research)"}
 # SEC requires a descriptive UA with contact info — set SEC_CONTACT_EMAIL in your env / .env.
-SEC_UA = {"User-Agent": f"bank-ops-ai-agent research {os.getenv('SEC_CONTACT_EMAIL', 'contact@example.com')}"}
+SEC_CONTACT = os.getenv("SEC_CONTACT_EMAIL", "contact@example.com")
+SEC_UA = {"User-Agent": f"bank-ops-ai-agent research {SEC_CONTACT}"}
 
 CFPB_API = "https://www.consumerfinance.gov/data-research/consumer-complaints/search/api/v1/"
 CFPB_BULK = "https://files.consumerfinance.gov/ccdb/complaints.csv.zip"
@@ -49,14 +51,16 @@ _manifest: list[dict] = []
 def _write(path: Path, data: bytes, url: str, rows: int | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
-    _manifest.append({
-        "path": str(path.relative_to(ROOT)).replace("\\", "/"),
-        "url": url,
-        "pulled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "rows": rows,
-        "bytes": len(data),
-        "sha256": hashlib.sha256(data).hexdigest(),
-    })
+    _manifest.append(
+        {
+            "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+            "url": url,
+            "pulled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "rows": rows,
+            "bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+    )
     print(f"  wrote {path.relative_to(ROOT)}  rows={rows}  bytes={len(data):,}")
 
 
@@ -65,7 +69,7 @@ def _get(url: str, headers: dict | None = None, **kw) -> requests.Response:
         r = requests.get(url, headers=headers or BROWSER_UA, timeout=120, **kw)
         if r.status_code == 200:
             return r
-        time.sleep(2 ** attempt)
+        time.sleep(2**attempt)
     r.raise_for_status()
     return r
 
@@ -89,20 +93,26 @@ def fetch_cfpb_monthly_counts(smoke: bool) -> None:
     rows = []
     for bank_id, b in BANKS.items():
         for m_start, m_end in _months(start, today):
-            url = (f"{CFPB_API}?size=0&no_aggs=true&company={quote(b['cfpb_company'])}"
-                   f"&date_received_min={m_start}&date_received_max={m_end}")
+            url = (
+                f"{CFPB_API}?size=0&no_aggs=true&company={quote(b['cfpb_company'])}"
+                f"&date_received_min={m_start}&date_received_max={m_end}"
+            )
             n = _get(url).json()["hits"]["total"]["value"]
             rows.append({"bank_id": bank_id, "month": m_start.isoformat(), "complaints": n})
     buf = io.StringIO()
     w = csv.DictWriter(buf, fieldnames=["bank_id", "month", "complaints"])
-    w.writeheader(); w.writerows(rows)
+    w.writeheader()
+    w.writerows(rows)
     _write(RAW / "cfpb" / "monthly_counts.csv", buf.getvalue().encode(), CFPB_API, len(rows))
 
 
 def fetch_cfpb_sample(smoke: bool) -> None:
     """Row-level sample from the API for the focal bank (schema exploration)."""
     print("CFPB row sample")
-    url = f"{CFPB_API}?size={25 if smoke else 1000}&no_aggs=true&company={quote(FOCAL['cfpb_company'])}&sort=created_date_desc"
+    url = (
+        f"{CFPB_API}?size={25 if smoke else 1000}&no_aggs=true"
+        f"&company={quote(FOCAL['cfpb_company'])}&sort=created_date_desc"
+    )
     hits = _get(url).json()["hits"]["hits"]
     data = json.dumps([h["_source"] for h in hits], indent=1).encode()
     _write(RAW / "cfpb" / "sample_focal.json", data, url, len(hits))
@@ -116,10 +126,18 @@ def fetch_cfpb_bulk() -> None:
     h = hashlib.sha256()
     with path.open("wb") as f:
         for chunk in r.iter_content(1 << 20):
-            f.write(chunk); h.update(chunk)
-    _manifest.append({"path": "data/raw/cfpb/complaints.csv.zip", "url": CFPB_BULK,
-                      "pulled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                      "rows": None, "bytes": path.stat().st_size, "sha256": h.hexdigest()})
+            f.write(chunk)
+            h.update(chunk)
+    _manifest.append(
+        {
+            "path": "data/raw/cfpb/complaints.csv.zip",
+            "url": CFPB_BULK,
+            "pulled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "rows": None,
+            "bytes": path.stat().st_size,
+            "sha256": h.hexdigest(),
+        }
+    )
     print(f"  wrote {path.relative_to(ROOT)}  bytes={path.stat().st_size:,}")
 
 
@@ -128,12 +146,15 @@ def fetch_fdic(smoke: bool) -> None:
     print("FDIC financials")
     certs = " OR ".join(b["fdic_cert"] for b in BANKS.values())
     fields = ",".join(["CERT"] + CONFIG["fdic_fields"])
-    url = (f"{FDIC_API}?filters=CERT:({quote(certs)})&fields={fields}"
-           f"&sort_by=REPDTE&sort_order=DESC&limit={20 if smoke else 10000}")
+    url = (
+        f"{FDIC_API}?filters=CERT:({quote(certs)})&fields={fields}"
+        f"&sort_by=REPDTE&sort_order=DESC&limit={20 if smoke else 10000}"
+    )
     recs = [d["data"] for d in _get(url).json()["data"]]
     buf = io.StringIO()
     w = csv.DictWriter(buf, fieldnames=["CERT"] + CONFIG["fdic_fields"], extrasaction="ignore")
-    w.writeheader(); w.writerows(recs)
+    w.writeheader()
+    w.writerows(recs)
     _write(RAW / "fdic" / "financials.csv", buf.getvalue().encode(), url, len(recs))
 
 
@@ -158,26 +179,42 @@ def fetch_edgar(smoke: bool) -> None:
         recent = _get(idx_url, SEC_UA).json()["filings"]["recent"]
         filings = [
             {"form": f, "filingDate": d, "accession": a, "doc": p}
-            for f, d, a, p in zip(recent["form"], recent["filingDate"],
-                                  recent["accessionNumber"], recent["primaryDocument"])
+            for f, d, a, p in zip(
+                recent["form"],
+                recent["filingDate"],
+                recent["accessionNumber"],
+                recent["primaryDocument"],
+                strict=True,
+            )
             if f in ("10-K", "10-Q")
         ][:5]
-        _write(RAW / "edgar" / bank_id / "filings_index.json",
-               json.dumps(filings, indent=1).encode(), idx_url, len(filings))
+        _write(
+            RAW / "edgar" / bank_id / "filings_index.json",
+            json.dumps(filings, indent=1).encode(),
+            idx_url,
+            len(filings),
+        )
         if smoke:
             continue
         for f in filings:
-            doc_url = (f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
-                       f"{f['accession'].replace('-', '')}/{f['doc']}")
-            _write(RAW / "edgar" / bank_id / f"{f['form']}_{f['filingDate']}.htm",
-                   _get(doc_url, SEC_UA).content, doc_url)
+            doc_url = (
+                f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
+                f"{f['accession'].replace('-', '')}/{f['doc']}"
+            )
+            _write(
+                RAW / "edgar" / bank_id / f"{f['form']}_{f['filingDate']}.htm",
+                _get(doc_url, SEC_UA).content,
+                doc_url,
+            )
             time.sleep(0.2)  # SEC fair-access: stay well under 10 req/s
 
 
 # --------------------------------------------------------------------------- eCFR
 def fetch_ecfr(smoke: bool) -> None:
     print("eCFR regulations")
-    issue = next(t["latest_issue_date"] for t in _get(ECFR_TITLES).json()["titles"] if t["number"] == 12)
+    issue = next(
+        t["latest_issue_date"] for t in _get(ECFR_TITLES).json()["titles"] if t["number"] == 12
+    )
     parts = list(CONFIG["regulations"])[: 1 if smoke else None]
     for part in parts:
         url = ECFR_PART.format(date=issue, part=part)
@@ -196,10 +233,14 @@ SOURCES = {
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--source", nargs="+", choices=list(SOURCES), default=list(SOURCES))
     ap.add_argument("--smoke", action="store_true", help="tiny pull from each source")
-    ap.add_argument("--cfpb-bulk", action="store_true", help="also download the full CFPB CSV (~350 MB)")
+    ap.add_argument(
+        "--cfpb-bulk", action="store_true", help="also download the full CFPB CSV (~350 MB)"
+    )
     args = ap.parse_args()
 
     failed = []

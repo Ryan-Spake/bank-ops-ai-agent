@@ -1,0 +1,41 @@
+# Install once:  pre-commit install --install-hooks -t pre-commit -t pre-push
+# Run on all files:  pre-commit run --all-files
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: detect-private-key
+      # Raw data belongs in data/ (git-ignored), never in a commit.
+      - id: check-added-large-files
+        args: [--maxkb=500]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      # detect-private-key misses API keys; block the ones this project uses.
+      - id: no-api-keys
+        name: block Anthropic / Snowflake secrets
+        language: pygrep
+        entry: '(sk-ant-[A-Za-z0-9_-]{20,}|SNOWFLAKE_PASSWORD=\S+)'
+        exclude: ^(\.env\.example|\.pre-commit-config\.yaml)$
+
+      # Tests run on push, not every commit, to keep commits instant.
+      - id: pytest
+        name: pytest
+        language: system
+        entry: python -m pytest -q
+        pass_filenames: false
+        stages: [pre-push]
