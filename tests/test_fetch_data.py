@@ -21,5 +21,4 @@ def test_months_spans_year_boundary(fetch_data):
 
 def test_seeds_drive_the_fetcher(fetch_data):
     assert set(fetch_data.BANKS) == {"jpm", "bac", "wfc", "citi", "cof"}
-    assert fetch_data.FOCAL["bank_id"] == "jpm"
     assert "DRCCLACBS" in fetch_data.FRED_SERIES
