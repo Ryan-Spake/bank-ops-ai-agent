@@ -1,12 +1,11 @@
 """Consistency checks on hand-maintained config: seeds and the eval question set."""
 
 import csv
-from pathlib import Path
 
 import pytest
 import yaml
+from conftest import ROOT
 
-ROOT = Path(__file__).resolve().parents[1]
 SEEDS = ROOT / "dbt" / "seeds"
 
 

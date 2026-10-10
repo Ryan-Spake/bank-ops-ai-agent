@@ -48,20 +48,32 @@ ECFR_PART = "https://www.ecfr.gov/api/versioner/v1/full/{date}/title-12.xml?part
 _manifest: list[dict] = []
 
 
-def _write(path: Path, data: bytes, url: str, rows: int | None = None) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
+def _record(path: Path, url: str, rows: int | None, nbytes: int, sha256: str) -> None:
     _manifest.append(
         {
             "path": str(path.relative_to(ROOT)).replace("\\", "/"),
             "url": url,
             "pulled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "rows": rows,
-            "bytes": len(data),
-            "sha256": hashlib.sha256(data).hexdigest(),
+            "bytes": nbytes,
+            "sha256": sha256,
         }
     )
-    print(f"  wrote {path.relative_to(ROOT)}  rows={rows}  bytes={len(data):,}")
+    print(f"  wrote {path.relative_to(ROOT)}  rows={rows}  bytes={nbytes:,}")
+
+
+def _write(path: Path, data: bytes, url: str, rows: int | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    _record(path, url, rows, len(data), hashlib.sha256(data).hexdigest())
+
+
+def _csv(rows: list[dict], fields: list[str]) -> bytes:
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+    w.writeheader()
+    w.writerows(rows)
+    return buf.getvalue().encode()
 
 
 def _get(url: str, headers: dict | None = None, **kw) -> requests.Response:
@@ -99,11 +111,8 @@ def fetch_cfpb_monthly_counts(smoke: bool) -> None:
             )
             n = _get(url).json()["hits"]["total"]["value"]
             rows.append({"bank_id": bank_id, "month": m_start.isoformat(), "complaints": n})
-    buf = io.StringIO()
-    w = csv.DictWriter(buf, fieldnames=["bank_id", "month", "complaints"])
-    w.writeheader()
-    w.writerows(rows)
-    _write(RAW / "cfpb" / "monthly_counts.csv", buf.getvalue().encode(), CFPB_API, len(rows))
+    data = _csv(rows, ["bank_id", "month", "complaints"])
+    _write(RAW / "cfpb" / "monthly_counts.csv", data, CFPB_API, len(rows))
 
 
 def fetch_cfpb_sample(smoke: bool) -> None:
@@ -128,17 +137,7 @@ def fetch_cfpb_bulk() -> None:
         for chunk in r.iter_content(1 << 20):
             f.write(chunk)
             h.update(chunk)
-    _manifest.append(
-        {
-            "path": "data/raw/cfpb/complaints.csv.zip",
-            "url": CFPB_BULK,
-            "pulled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "rows": None,
-            "bytes": path.stat().st_size,
-            "sha256": h.hexdigest(),
-        }
-    )
-    print(f"  wrote {path.relative_to(ROOT)}  bytes={path.stat().st_size:,}")
+    _record(path, CFPB_BULK, None, path.stat().st_size, h.hexdigest())
 
 
 # --------------------------------------------------------------------------- FDIC
@@ -151,11 +150,8 @@ def fetch_fdic(smoke: bool) -> None:
         f"&sort_by=REPDTE&sort_order=DESC&limit={20 if smoke else 10000}"
     )
     recs = [d["data"] for d in _get(url).json()["data"]]
-    buf = io.StringIO()
-    w = csv.DictWriter(buf, fieldnames=["CERT"] + CONFIG["fdic_fields"], extrasaction="ignore")
-    w.writeheader()
-    w.writerows(recs)
-    _write(RAW / "fdic" / "financials.csv", buf.getvalue().encode(), url, len(recs))
+    data = _csv(recs, ["CERT"] + CONFIG["fdic_fields"])
+    _write(RAW / "fdic" / "financials.csv", data, url, len(recs))
 
 
 # --------------------------------------------------------------------------- FRED
